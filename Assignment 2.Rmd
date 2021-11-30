@@ -18,7 +18,7 @@ gg_scatterplot
 ```
 #Q2: Build a simple linear regression model and plot
 ```{r,echo=TRUE,fig.height=5, fig.width=10,message=TRUE}
-#build a regression model
+#build a simple linear regression model
 fit = lm(mydata$vital.capacity ~ mydata$age)
 summary(fit)
 

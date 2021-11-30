@@ -1,0 +1,195 @@
+---
+title: "Assignment 3"
+output:
+  html_document:
+    df_print: paged
+---
+
+#Q1：Load, clean and split Data
+```{r, message=FALSE}
+#load data and library
+library(mlbench)
+library(caret)
+library(dplyr)
+library(data.table)
+library(class)
+library(caTools)
+Ionosphere = fread("https://archive.ics.uci.edu/ml/machine-learning-databases/ionosphere/ionosphere.data")
+
+#clean data
+Ionosphere = Ionosphere[, -2] #column 2 only has single unique value
+Ionosphere = unique(Ionosphere) #remove duplication
+Ionosphere$V1 = as.numeric(Ionosphere$V1) #convert to numeric
+Ionosphere$V35 = as.factor(Ionosphere$V35) #convert to factor
+
+#split data
+set.seed(12L)
+tr.idx = createDataPartition(Ionosphere$V35, p = .8, list = FALSE)
+tr = Ionosphere[tr.idx,] #train data
+ts = Ionosphere[-tr.idx,] #test data
+```
+
+
+#Q2
+##preparation
+```{r}
+
+myControl = trainControl(
+  method = "cv",
+  number = 10,
+  summaryFunction = twoClassSummary,
+  classProb = TRUE,
+  verboseIter = FALSE,
+  savePredictions = TRUE
+)
+```
+
+##logistic regressions
+```{r}
+#train
+set.seed(42)
+log_model = train(V35 ~ ., 
+                  tr, 
+                  metric = "ROC",
+                  method = "glm", 
+                  trControl = myControl)
+print(log_model)
+
+#test and compute AUC
+prediction_p_log = predict(log_model, ts, type = "prob")
+colAUC(prediction_p_log, ts$V35, plotROC = TRUE)
+
+
+```
+
+##KNN
+```{r}
+#train
+set.seed(42)
+knn_model = train(V35 ~ .,
+                  tr,
+                  metric = "ROC",
+                  method = "knn",
+                  tuneLength = 10,
+                  trControl = myControl)
+print(knn_model)
+
+#test and compute AUC
+prediction_p_knn = predict(knn_model, ts, type = "prob")
+colAUC(prediction_p_knn, ts$V35, plotROC = TRUE)
+
+```
+
+
+##SVM
+```{r}
+#train
+set.seed(42)
+library(kernlab) 
+svm_model = train(V35 ~ .,
+                   tr,
+                   metric = "ROC",
+                   method = "svmRadial",
+                   tuneLength = 10,
+                   trControl = myControl)
+print(svm_model)
+
+#test and compute AUC
+prediction_p_svm = predict(svm_model, ts, type = "prob")
+colAUC(prediction_p_svm, ts$V35, plotROC = TRUE)
+
+```
+
+##naïve bayes
+```{r}
+#train
+set.seed(42)
+library(naivebayes)
+nb_model <- train(V35 ~ .,
+                  tr,
+                  metric = "ROC",
+                  method = "naive_bayes",
+                  trControl = myControl)
+print(nb_model)
+
+#test and compute AUC
+prediction_p_nb = predict(nb_model, ts, type = "prob")
+colAUC(prediction_p_nb, ts$V35, plotROC = TRUE)
+
+```
+
+##decision trees
+```{r}
+#train
+set.seed(42)
+library(rpart)
+dt_model <- train(V35 ~ .,
+                  tr,
+                  metric = "ROC",
+                  method = "rpart",
+                  tuneLength = 10,
+                  trControl = myControl)
+
+print(dt_model)
+
+#test and compute AUC
+prediction_p_dt = predict(dt_model, ts, type = "prob")
+colAUC(prediction_p_dt, ts$V35, plotROC = TRUE)
+```
+
+##random forest
+```{r}
+#train
+set.seed(42)
+library(ranger)
+rf_model = train(V35 ~ .,
+                  tr,
+                  metric = "ROC",
+                  method = "ranger",
+                  tuneGrid = expand.grid(
+                      mtry = c(2, 5, 10, 19),
+                      splitrule = c("gini", "extratrees"),
+                      min.node.size = 1),
+                  trControl = myControl)
+print(rf_model)
+
+#test and compute AUC
+prediction_p_rf = predict(rf_model, ts, type = "prob")
+colAUC(prediction_p_rf, ts$V35, plotROC = TRUE)
+
+```
+
+##glmnet
+```{r}
+#train
+set.seed(42)
+library(glmnet)
+glm_model = train(V35 ~ .,
+                   tr,
+                   metric = "ROC",
+                   method = "glmnet",
+                   tuneGrid = expand.grid(
+                       alpha = 0:1,
+                       lambda = 0:10/10),
+                   trControl = myControl)
+print(glm_model)
+
+#test and compute AUC
+prediction_p_glm = predict(glm_model, ts, type = "prob")
+colAUC(prediction_p_glm, ts$V35, plotROC = TRUE)
+```
+
+#Q3: model selection and visualization
+```{r}
+model_list = list(log = log_model,
+                   knn = knn_model,
+                   svm = svm_model,
+                   nb = nb_model,
+                   dt = dt_model,
+                   rf = rf_model,
+                   glmmet = glm_model)
+resamps = resamples(model_list)
+summary(resamps)
+lattice::bwplot(resamps, metric = "ROC")
+```
+The random forest has the highest accuracy and should be selected.

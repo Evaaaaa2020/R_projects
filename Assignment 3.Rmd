@@ -32,7 +32,6 @@ ts = Ionosphere[-tr.idx,] #test data
 #Q2
 ##preparation
 ```{r}
-
 myControl = trainControl(
   method = "cv",
   number = 10,
@@ -51,6 +50,7 @@ log_model = train(V35 ~ .,
                   tr, 
                   metric = "ROC",
                   method = "glm", 
+                  tuneLength = 10,
                   trControl = myControl)
 print(log_model)
 
@@ -108,6 +108,7 @@ nb_model <- train(V35 ~ .,
                   tr,
                   metric = "ROC",
                   method = "naive_bayes",
+                  tuneLength = 10,
                   trControl = myControl)
 print(nb_model)
 
@@ -145,10 +146,7 @@ rf_model = train(V35 ~ .,
                   tr,
                   metric = "ROC",
                   method = "ranger",
-                  tuneGrid = expand.grid(
-                      mtry = c(2, 5, 10, 19),
-                      splitrule = c("gini", "extratrees"),
-                      min.node.size = 1),
+                  tuneLength = 10,
                   trControl = myControl)
 print(rf_model)
 
@@ -167,9 +165,7 @@ glm_model = train(V35 ~ .,
                    tr,
                    metric = "ROC",
                    method = "glmnet",
-                   tuneGrid = expand.grid(
-                       alpha = 0:1,
-                       lambda = 0:10/10),
+                   tuneLength = 10,
                    trControl = myControl)
 print(glm_model)
 
@@ -191,3 +187,5 @@ resamps = resamples(model_list)
 summary(resamps)
 lattice::bwplot(resamps, metric = "ROC")
 ```
+
+The random forest model and the svm model both look best in terms of ROC or AUC, but the random forest model has slightly higher scores in terms of Mean, Min, Medium and Max. It also has pretty good Sensitivity and Specificity. If I have to select one, I will choose the random forest model.

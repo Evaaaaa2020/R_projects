@@ -1,0 +1,306 @@
+---
+title: "Final Project"
+geometry: "left = 1.5cm, right = 1.5cm, top = 1.5cm, bottom = 1.5cm"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+<style>
+  body {font-size: 10pt;}
+</style>
+
+## Preparation and Exploratory Data Analysis
+
+### Load data and call library
+```{r, echo=TRUE, warning = F, message = F}
+library(dplyr); library(broom)
+library(ggplot2); library(corrplot); library(cowplot); library(caTools) 
+library(caret); library(kernlab); library(naivebayes); library(rpart); library(ranger); library(glmnet)  
+mydata = read.delim("./Customer Data", sep = ";")
+```
+
+### Clean data
+Preliminary cleaning is conducted below.
+```{r, echo=TRUE, warning = F}
+#remove empty variable, "X", and non-feature variable "ID"
+mydata = mydata[,-18]; mydata = mydata[,-1] 
+#handle duplication issue, if any
+mydata = mydata %>% distinct()
+#check wrong record issues (i.e., a customer is both good and bad customer)
+table(mydata$Good_Customer, mydata$Bad_Customer)#no such issue detected
+#remove "Bad_Customer", as it shows the same information as "Good_Customer"
+mydata=mydata[,-16]
+#Wrong categorization: chr to numeric, chr to factor, num to int
+mydata$Installment_Percentage = as.numeric(sub("%", "", mydata$Installment_Percentage))/100
+ix1 =  c(6, 11, 12, 14)
+mydata[ix1] = lapply(mydata[ix1], as.factor)
+mydata$Number_of_Dependants = as.integer(mydata$Number_of_Dependants)
+```
+
+Missing values are detected as below.
+```{r, echo=TRUE, warning = F}
+mydata[mydata  == ""] = NA
+names(which(sapply(mydata, anyNA)))
+summary(mydata$Number_of_Dependants)
+```
+Dealing with missing values:   
+  1. **Good_Custome**: missing values are dropped, and it is changed to factor.   
+  2. **Number_of_Depandants**: instead of simply dropping, they are imputed by K-nearest neighbors, given the number of missing values is large (i.e., 246).   
+  3. **Installment_Percentage**: the same as "Number_of_Depandants"  
+```{r, echo=TRUE, warning = F, message = F}
+#remove missing value for target variable and change the target variable to factor
+mydata = subset(mydata, Good_Customer != "Yes" | Good_Customer != "No")
+mydata$Good_Customer = as.factor(mydata[,15])
+
+#impute missing value using K-nearest neighbor for "Installment_Percentage"
+temp1 = which(is.na(mydata$Installment_Percentage))
+preProc.1 = preProcess(mydata[-temp1], method = c("knnImpute"), k = 5, knnSummary = mean)
+impute_customer.1 = predict(preProc.1,mydata)
+procNames.1 = data.frame(col = names(preProc.1$mean), mean = preProc.1$mean, sd = preProc.1$std)
+for(i in procNames.1$col){
+  impute_customer.1[i] = impute_customer.1[i]*preProc.1$std[i]+preProc.1$mean[i] 
+}#de-normalize
+mydata$Installment_Percentage = impute_customer.1$Installment_Percentage
+
+#impute missing value using K-nearest neighbor for "Number_of_Dependants"
+temp2 = which(is.na(mydata$Number_of_Dependants))
+preProc.2 = preProcess(mydata[-temp2], method = c("knnImpute"), k = 5, knnSummary = mean)
+impute_customer.2 = predict(preProc.2,mydata)
+procNames.2 = data.frame(col = names(preProc.2$mean), mean = preProc.2$mean, sd = preProc.2$std)
+for(i in procNames.2$col){
+  impute_customer.2[i] = impute_customer.2[i]*preProc.2$std[i]+preProc.2$mean[i] 
+} #de-normalize
+mydata$Number_of_Dependants = impute_customer.2$Number_of_Dependants
+mydata$Number_of_Dependants = round(mydata$Number_of_Dependants, 0)
+```
+
+### Summary Statistics
+The data is summarized with descriptive statistics and visualized as follows.
+```{r, echo=TRUE, results='hide', fig.height=10, fig.width=10}
+#results='hide' since it is not as informative as graphs
+summary(mydata) 
+```
+
+```{r, echo=TRUE, fig.height=7, fig.width=7}
+#Visualization
+ix1 = c(ix1, 15)
+mydata.ca = mydata[,ix1]#categorical
+mydata.num = mydata[,-ix1]#integer and continuous
+col_name.num= colnames(mydata.num)#pass column names
+col_name.ca= colnames(mydata.ca)
+par(mfrow = c(4,4))
+#numeric
+for(i in 1:10){
+  hist(mydata.num[,i], main = col_name.num[i],  breaks=sqrt(nrow(mydata.num)),
+       xlab = col_name.num[i], pch = 20, col = c("#104E8B"))
+}
+#categorical (y= percentage)
+for(i in 1:5){
+  counts = table(mydata.ca[,i])
+  barplot(counts/sum(counts), main = col_name.ca[i],
+       xlab = col_name.ca[i], pch = 20, col = c("#104E8B"))
+}
+```
+
+It can be observed that:  
+  1. Much more customers are categorized as bad customers (around 85%) than good customers (around 15%).   
+  2. The distributions of continuous variables such as "Annual_Income" are heavily right-skewed.   
+These two observations indicate that the data is not very balanced, which may be related to sampling issues
+
+### Important features
+Boxplots can generally show the mean difference between good and bad customers as below. 
+```{r}
+par(mfrow = c(2,5))
+for(i in 1:10){
+  boxplot(mydata.num[,i] ~ mydata$Good_Customer,
+          main = col_name.num[i], xlab = "Good Customer", ylab = " ",
+          cex.main= 0.8, pch = 20, col = c("#F57C00", "#FFE0B2"))
+}
+```
+   
+However, they **MAY NOT** indicate the ranking of features importance. The ranking can be revealed by standardized co-efficient in the generalized linear model (GLM), and can be visualized by *ggplot*. Firstly, dummy variables are created for categorical variables, and the data is standardized. 
+```{r, echo=TRUE, warning = F, message = F}
+#create dummy variables for categorical variables using functions in caret
+dummies = dummyVars(Good_Customer ~ ., mydata)
+mydata.dum = predict(dummies, mydata)
+mydata.dum = as.data.frame(scale(mydata.dum)) #standardization
+#combine with target variables
+mydata.dum = cbind(mydata.dum, mydata$Good_Customer) 
+colnames(mydata.dum) = make.names(colnames(mydata.dum)) #rename columns
+colnames(mydata.dum)[27] = "Good_Customer"
+mydata.dum = as.data.frame(mydata.dum)
+```
+Next, the GLM model is applied. After dropping the non-significant features (i.e., p > 0.05), standardized coefficients of the rest features are plotted in a ranked order using ggplot 2.
+```{r, echo=TRUE, warning = F, results='hide'}
+glm.fit1 = glm(Good_Customer ~ ., binomial, mydata.dum)
+summary(glm.fit1)#results='hide', drop non-significant features next
+glm.fit2 = glm(Good_Customer ~ Credit_History + Number_of_Dependants + 
+      Employment.2 + Installment_Percentage + Time_at_Current_Employment + 
+        Age + Area_Indicator.0 + Area_Indicator.1 + Area_Indicator.2 + 
+        Area_Indicator.3, binomial, mydata.dum)
+summary(glm.fit2) #results='hide', All p <0.05.
+coef = tidy(glm.fit2, conf.int = TRUE)
+```
+
+```{r, fig.height= 3.5}
+#plot: y = standardized co-efficient, point range = confidence interval
+ggplot(coef, aes(x=reorder(term, -estimate), y = estimate))+
+  geom_point(size = 0.1)+ geom_pointrange(aes(ymin = conf.low, ymax = conf.high))+
+  ggtitle("Coefficients")+ xlab("")+theme(axis.text.x=element_text(angle=45, hjust=1))
+```
+   
+From the plot, it can be seen that   
+  1. **Installment_Percentage** and **"Area_Indicator"** have the highest scores.   
+  2. **Employment 2** (i.e.,whether people are self-employed) is the third important features.   
+Therefore, the three most important features are "installment_percentage", "Area_Indicator" and whether people are self-employed.
+
+### Correlation between features
+Correlations between features are detected by **Spearman method**, because unlike Pearson correlation that assumes linearity, it only requires variables to be monotonical and at least ordinal.
+```{r, fig.height= 3.5}
+M = cor(mydata.dum[-27], method = "spearman")
+corrplot(M, method = "color",col = COL2("PiYG"), addgrid.col = 'white', 
+         addCoef.col = "grey50", tl.cex = 0.3, number.cex = 0.2) #Please zoom in pdf to see numbers
+#drop correlated features
+mydata = mydata[,c(-1,-4)]
+mydata.dum = mydata.dum[,c(-1,-4)]
+```
+It can be seen that  
+  1. **Annual_Income** and **Amount** perfectly positively correlated with each other  
+  2. **Installment_Percentage** perfectly negatively correlated with **Annual_Income** and **Amount**.
+Since Installment_Percentage is identified as an important feature, the other two are dropped.     Categorical variables are also considered (i.e., using dummy variables):   
+  1.Correlations exist between dummy variables of the **SAME** categorical variable.  
+  2.No high correlation is detected between **DIFFERENT** categorical variables.  
+  3.No high correlation is detected between the categorical variables and numeric variables.    
+
+### Outliers
+outliers may be detected by considering each feature using the boxplots as in the **important features** section. Codes are provided below again.
+```{r, fig.show='hide'}
+par(mfrow = c(2,5)) #fig.show='hide', please refer to the boxplot in the important features section
+for(i in 1:10){
+  boxplot(mydata.num[,i] ~ mydata$Good_Customer,
+          main = col_name.num[i], xlab = "Good Customer", ylab = " ",
+          cex.main= 0.6, pch = 20, col = c("#d9ead3", "#6aa84f"))
+}
+```
+Boxplots show potential outliers for **MOST features**, which generates two issues. First, by looking at the data, there are no extremely unreasonable points (i.e., negative income), but this does not mean that these "potential outliers" are not problems. Second, potential outliers may occur in multiple features of ONE customer, and may not be problems if they are considered together. 
+
+To deal with the issue, one possible approach is to compare the predicted possibility by the GLM model with the true labels of each customer. For instance, outliers are likely to occur if a customer is labeled as good (i.e., should have possibility >= 0.5), but the predicted possibility is very low (e.g., predicted possibility = 0.05 << 0.5). Such a large difference is not likely to result from random error. Here, the wrongly-identified customers with a predicted possibility > 95% or < 5% are considered as outliers.
+```{r, echo=TRUE, warning = F, message = F}
+#Predict customer type based on the GLM model without correlated features
+glm.fit3 = glm(Good_Customer ~ ., binomial, mydata.dum)
+prob = predict(glm.fit3, newdata = mydata.dum[,1:25], type="response")
+predicted = ifelse(prob >= 0.5, 2, 1) #1=bad, 2=good
+outlier.check = cbind(prob, mydata$Good_Customer)
+colnames(outlier.check)[2] = "Good_Customer"
+outlier.check = as.data.frame(outlier.check)
+#Comparing predicted possibility when labeling is wrong and remove outliers
+outlier.check = outlier.check %>%
+  mutate(problem = ifelse(Good_Customer == 1 & prob < 0.5 | Good_Customer == 2 & 
+                            prob > 0.5, "correct", "wrong"))
+outlier.detect = subset(outlier.check, problem == "wrong" & prob < 0.05 | prob > 0.955)
+ix3 = as.numeric(rownames(outlier.detect))
+mydata = mydata[-ix3,]
+mydata.dum = mydata.dum[-ix3,]
+```
+Among wrongly-identified customers, there are 12 customers with a possibility below 5% or above 95%. Thus, they are considered as outliers, and removed. Other data quality issues have been checked at the beginning of this report, including handling missing values, detecting wrong records, etc. 
+
+## Statistical Modeling
+This section aims to build a statistical model that suggests a suitable proportion of good customers while controlling the rate of wrongly identified bad customers. To achieve the goal, the general method is to train and compare different models, and select the best one for further analysis. 
+
+### Split data
+Data are split, with 80% for training and 20% for testing. For tree-based models, the data **without** dummy variables are split; for non-tree-based models, the data **with** dummy variables are split.
+```{r, echo=TRUE, warning = F, message = F}
+#Split dataset for tree-based models
+set.seed(12L)
+tr.idx = createDataPartition(mydata$Good_Customer, p = .8, list = FALSE)
+tr  = mydata[tr.idx,] #train data
+ts  = mydata[-tr.idx,] #test data
+#Split dataset for non-tree-based models
+tr.idx.dum = createDataPartition(mydata.dum$Good_Customer, p = .8, list = FALSE)
+tr.dum  = mydata.dum[tr.idx.dum,] #train data
+ts.dum  = mydata.dum[-tr.idx.dum,] #test data
+```
+
+### Define control function for training
+```{r, echo=TRUE, warning = F, message = F}
+myControl = trainControl(
+  method = "cv", number = 10, summaryFunction = twoClassSummary, 
+  classProb = TRUE, verboseIter = FALSE, savePredictions = TRUE
+)
+```
+
+### Training
+KNN, SVM, naïve bayes, decision trees, random forest, glmnet are trained. Particularly, "Specificity" is used for "metric." The logic is as follows: 1) the default positive class is **No for Good_Customer**, so optimizing "Sensitivity" matches best for the goal of controlling wrongly identified bad customers; 2) however, given the small number of good customers in the original data, it is assumed that the "Sensitivity" rates for all models will be high while the "Specificity" rates will be low (which turns out to be true after testing). Since the company also needs to consider the wrongly-identified good customers for their market share, the models use "Specificity" as a metric. 
+```{r, echo=TRUE, warning = F, message = F}
+#KNN
+set.seed(42)
+knn_model = train(Good_Customer ~ ., tr.dum, metric = "Spec", method = "knn",
+                  tuneLength = 10, trControl = myControl)
+#SVM
+set.seed(42)
+svm_model = train(Good_Customer ~ ., tr.dum, metric = "Spec", method = "svmRadial",
+                   tuneLength = 10, trControl = myControl)
+#naïve bayes
+set.seed(42)
+nb_model = train(Good_Customer ~ ., tr.dum, metric = "Spec",method = "naive_bayes",
+                  tuneLength = 10, trControl = myControl)
+#decision trees
+set.seed(42)
+dt_model <- train(Good_Customer ~ ., tr, metric = "Spec", method = "rpart",
+                  tuneLength = 10, trControl = myControl)
+#random forest
+set.seed(42)
+rf_model = train(Good_Customer ~ ., tr, metric = "Spec", method = "ranger",
+                  tuneGrid = expand.grid(mtry = c(2, 5, 10, 19),
+                      splitrule = c("gini", "extratrees"), min.node.size = 1),
+                  trControl = myControl)
+#glmnet
+set.seed(42)
+glmnet_model = train(Good_Customer ~ ., tr.dum, metric = "Spec",method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 0:1, lambda = 0:10/10),
+                   tuneLength = 10, trControl = myControl)
+```
+
+### Model selection using re-sampling
+The major selection criterion is **balancing "Sensitivity" and "Specificity."** This is because, in addition to accepting customers (i.e., reduce wrongly-identified bad customers), the company also wants to avoid customers default (i.e., reduce wrongly-identified good customers). After ensuring "Sensitivity" and "Specificity.", accuracy will also be considered.
+```{r, echo=TRUE, warning = F, fig.height = 2.5}
+model_list = list(knn = knn_model, svm = svm_model, nb = nb_model, dt = dt_model, 
+                  rf = rf_model, glmmet = glmnet_model) #make a list
+resamps = resamples(model_list) #resample
+p1 = lattice::bwplot(resamps, metric = "Spec") #visualization
+p2 = lattice::bwplot(resamps, metric = "Sens")
+p3 = lattice::bwplot(resamps, metric = "ROC")
+plot_grid(p1, p2, p3, nrow = 1)
+```
+
+The naïve bayes model performs best for "Specificity," but it performs worst in "Sensitivity", and therefore is not chosen. The SVM and KNN models are not chosen because the glment model outperforms them in all dimensions. The decision tree model is high in "Specificity," but it has the second lowest "Sensitivity", so it is not chosen either. The rest two (i.e., random forest and glmnet) have different strengths in "Sensitivity" and "Specificity," and both have high accuracy. Thus, they require further comparison. 
+
+### Predict on the testing data and suggest a good-customer proportion
+The random forest and glment models are applied to tested data. ROC curves are plotted to read the "Specificity" when 5%, 1% and 0.5% = 1-Sensitivity. As **positive class is NO**, wrongly-identified bad customers correspond to 1-Sensitivity, while wrongly-identified good customers correspond to 1-Specificity
+```{r, fig.height=4, fig.width=8}
+prediction_p_rf = predict(rf_model, ts, type = "prob") #random forest
+colAUC(prediction_p_rf, ts.dum$Good_Customer, plotROC = TRUE)
+
+prediction_p_glmnet = predict(glmnet_model, ts.dum, type = "prob") #glmnet
+colAUC(prediction_p_glmnet, ts.dum$Good_Customer, plotROC = TRUE)
+```
+
+For the random forest model, when "Sensitivity" is 95%, "Specificity" is around 5%. When "Sensitivity" is 99%, and 99.5%, “Specificity” is close to 0%. **This means**, when ensuring wrongly-identified bad customers to be at 5%, 1% and 0.5%, the proportion of good customer that can be granted loans is round 5%, and close to 0%, respectively. Besides, the AUC is quite low. 
+
+For the glmnet model, when "Sensitivity" is 95% and 99%, "Specificity" is around 50% and 45%, respectively. When "Sensitivity" is 99.5%, "Specificity" ranges from 15% to 45%. **This means**, when ensuring wrongly-identified bad customers to be at 5%, 1% and 0.5%, the proportion of good customer that can be granted loans is around 50%, 45%, and average 30%, respectively. **Therefore**, the glment model has fewer wrongly-identified good customers, and should be chosen. 
+
+**1%** seems to be the best among the three standards, because reducing wrongly-identified bad customers from 5% to 1% increases wrongly-identified good customers **to a larger extent** than reducing from 1% to 0.5%.
+
+### Top three important variables through the glmnet model
+```{r, fig.height= 5, fig.width = 7}
+feature.impt = varImp(glmnet_model, scale = FALSE)
+plot(feature.impt, cex.lab=0.2)
+```
+   
+According to the importance plot, the three most important features are: **whether the area indicator is 4**, **time at current employment**, and **installment percentage**, which partly matches with the suggestions in the exploratory data analysis. 
+
+```{r, results='hide'}
+print(feature.impt)#results='hide'; the specific importance scores for each feature
+```
+Specifically, the "Area_Indicator.4" has the highest score, **0.5671**, meaning that it is most important. the "Time_at_Current_Employment" is the second most important, as it has the second-highest score, **0.4865**. "Installment_Percentage" is regarded as the third important feature with the third-highest importance score of **0.4300**. 

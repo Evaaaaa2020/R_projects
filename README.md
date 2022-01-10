@@ -9,4 +9,4 @@
 
 **Machine Learning Final Project**: an example of comprehensive data analysis including EDA and statistical modeling.
 
-**Data TASK**: an example of handling experimental data, including data visualization, transformation between long and wide format, making proportion table, etc.
+**Data Task**: an example of handling experimental data, including data visualization, transformation between long and wide format, making proportion table, etc.

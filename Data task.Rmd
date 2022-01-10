@@ -1,0 +1,265 @@
+---
+title: "Data Task"
+author: "Yiyu Chen"
+date: "Jan 8th, 2021"
+output: word_document
+geometry: left = 1.5cm, right = 1.5cm, top = 1.5cm, bottom = 1.5cm
+---
+<style>
+  body {font-size: 11pt;}
+</style>
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, echo=FALSE, results='hide', warning=FALSE, message=FALSE}
+###load library
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(kableExtra)
+library(data.table)
+```
+
+
+```{r, laod and clean data, echo=FALSE, include = F, message= F, warning=F}
+
+###load data
+mydata = read_excel(path = "./Test_Data.xlsx", sheet = "Data")
+
+###Task 0: create csv with only one heading line
+mydata = mydata[-1:-2,]
+write.csv(mydata, file = "Data with one heading line.csv") 
+
+###simple data cleaning
+mydata= subset(mydata, !is.na(feelings_1))#exclude data with NA in feeling scores
+#names(which(sapply(mydata, anyNA))) #check if there is NA data in feeling scores
+mydata$ResponseId = as.factor(mydata$ResponseId) #change id to a factor
+mydata[, 30:35] = lapply(mydata[,30:35], as.numeric)#change feelings to numeric variables
+```
+
+
+
+#### Task 1: create a single bar graph compare means of different feelings   
+
+```{r, echo=FALSE}
+###change to a long format
+ix = c(9, 30:35, 67) #select relevant columns in the original data
+temp = mydata[,ix] #create a temporary data frame with relevant columns
+mydata.long = gather(temp, feeling, score, feelings_1:feelings_6, factor_key=TRUE)#change to a long format
+
+###calculate relevant stat
+plot.data = mydata.long %>%
+  group_by(feeling) %>%
+  summarise(mean = mean(score, na.rm=TRUE),
+  sd = sd(score, na.rm=TRUE),
+  n = n(),
+  se=sd/sqrt(n),
+  ci = qt(0.975, df=n-1)*se)
+
+###visualization
+ggplot(plot.data, aes(x=feeling, y=mean, group = factor(1))) + 
+  geom_bar(stat="identity") +
+  #error bar
+  geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
+  #text of titles
+  labs(x="Feelings", y="Scores") +
+  ggtitle("Means of Different Feelings") +
+  #format of titles
+  theme(legend.position="bottom",
+        plot.title = element_text(
+          hjust = 0.5, size = 12, face = "bold"))
+```
+   
+
+   
+#### Task 2: one-way ANOVA/pairwise t-tests for feelings   
+
+##### (1) one-way ANOVA test
+```{r, echo=FALSE}
+###one-way ANOVA test
+m1 = aov(score ~ feeling, mydata.long)
+summary(m1)
+
+###Tuckey post hoc
+TukeyHSD(m1)
+
+###Descriptive stat
+plot.data
+```
+
+A one-way ANOVA shows a significant difference among the scores of feeling (F(5,288) = 53.71, *p* < .001). A post hoc analysis, together with descriptive statistics, further reveals that 1) the score of feelings_1 is significantly lower than those of feelings_2-4; 2) the score of feeling_2 is significantly higher than those of feelings_3,5,6, but significantly lower than that of feelings_4; 3) the score of feeling_2 is significantly higher than those of feelings_5,6, but significantly lower than that of feelings_4; 4) he score of feeling_4 is significantly higher than those of feelings_5,6.    
+
+##### (2) pairwise t-tests
+
+##### (a)feeling_1 & feeling_2
+```{r, echo=FALSE}
+###feeling_1 & feeling_2
+feelings12 = mydata.long %>%
+  filter(feeling == "feelings_1" | feeling == "feelings_2")
+t.test(score ~ feeling, feelings12, paired = T, alternative = "two.sided")
+```
+
+##### (b)feeling_1 & feeling_3
+```{r, echo=FALSE}
+feelings13 = mydata.long %>%
+  filter(feeling == "feelings_1" | feeling == "feelings_3")
+t.test(score ~ feeling, feelings13, paired = T, alternative = "two.sided")
+```
+
+##### (c)feeling_1 & feeling_4
+```{r, echo=FALSE}
+feelings14 = mydata.long %>%
+  filter(feeling == "feelings_1" | feeling == "feelings_4")
+t.test(score ~ feeling, feelings14, paired = T, alternative = "two.sided")
+```
+
+##### (d) feeling_1 & feeling_5
+```{r, echo=FALSE}
+feelings15 = mydata.long %>%
+  filter(feeling == "feelings_1" | feeling == "feelings_5")
+t.test(score ~ feeling, feelings15, paired = T, alternative = "two.sided")
+```
+
+##### (e) feeling_1 & feeling_6
+```{r, echo=FALSE}
+feelings16 = mydata.long %>%
+  filter(feeling == "feelings_1" | feeling == "feelings_6")
+t.test(score ~ feeling, feelings16, paired = T, alternative = "two.sided")
+
+```
+
+The results of paired t-test shows that feelings_1 is significantly different from other feelings (all *p*s < .05)      
+
+
+
+#### Task 3: create a graph showing proportion of people choosing outcome_binary1    
+
+```{r, echo=FALSE, results='hide', warning=FALSE, message=FALSE, fig.height=8, fig.width=8}
+###make a proportion table
+outcome_binary1 = prop.table(
+  matrix(table(mydata$outcome_binary1), 
+         dimnames = list(c("I apologize first, then the person apologizes", 
+                           "Neither I nor the person apologizes"), 
+                         "proportion")))
+
+###change data type
+outcome_binary1 = as.data.frame(outcome_binary1) #change to a data frame
+outcome_binary1 = setDT(outcome_binary1, keep.rownames = T)[] #change the row name into a column
+colnames(outcome_binary1)[1] = "outcome" #rename the row name
+outcome_binary1$outcome = as.factor(outcome_binary1$outcome) #change to a factor
+outcome_binary1$proportion = round(outcome_binary1$proportion, digits = 4)
+
+
+###visualization
+ggplot(outcome_binary1, aes(x="", y=proportion, fill=outcome)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0)+
+  #titles
+  ggtitle("Proportion of Outcome1 (%)") +
+  geom_text(aes(label = proportion*100),
+            position = position_stack(vjust = 0.5))+
+  #format of titles
+  theme(legend.position="bottom",
+        plot.title = element_text(
+          hjust = 0.5, size = 12, face = "bold"))
+  
+  
+```
+    
+
+
+
+#### Task 4: proportion test of outcome_binary1   
+
+```{r, echo=FALSE}
+#10 participants choose "Neither I nor the person apologizes", while 39 choose "I apologize first, then the person apologizes"
+binom.test(x = 39, n = 49, p = 0.2041)
+```
+
+A one proportion test shows that the proportion of participants who chose "I apologize first, then the person apologizes" (79.59%) is significantly higher than that of participants who chose "Neither I nor the person apologizes" (20.41%, *p* < .001).       
+
+
+
+
+
+#### Task 5: create a graph showing proportion of people choosing outcome_binary2    
+
+```{r, echo=FALSE, results='hide', warning=FALSE, message=FALSE, fig.height=8, fig.width=8}
+###similar as task 3, make a proportion table
+outcome_binary2 = prop.table(
+  matrix(table(mydata$outcome_binary2), 
+         dimnames = list(c("I apologize first, but the person does not apologize after that",
+                           "Neither I nor the person apologizes"), 
+                         "proportion")))
+
+###similar as task 3, change data type
+outcome_binary2 = as.data.frame(outcome_binary2) #change to a data frame
+outcome_binary2 = setDT(outcome_binary2, keep.rownames = T)[] #change the row name into a column
+colnames(outcome_binary2)[1] = "outcome" #rename the row name
+outcome_binary2$outcome = as.factor(outcome_binary2$outcome) #change to a factor
+outcome_binary2$proportion = round(outcome_binary2$proportion, digits = 4)
+
+
+###similar as task 3, visualization
+ggplot(outcome_binary2, aes(x="", y=proportion, fill=outcome)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  #titles
+  ggtitle("Proportion of Outcome2 (%)") +
+  geom_text(aes(label = proportion*100),
+            position = position_stack(vjust = 0.5))+
+  #format of titles
+  theme(legend.position="bottom",
+        plot.title = element_text(
+          hjust = 0.5, size = 12, face = "bold"))
+```
+    
+
+
+#### Task 6: proportion test of outcome_binary2   
+
+```{r, echo = FALSE}
+#27 participants choose "Neither I nor the person apologizes", while 22 choose "I apologize first, but the person does not apologize after that"
+binom.test(x = 22, n = 49, p = 0.551)
+```
+A one proportion test shows that the proportion of participants who chose "I apologize first, but the person does not apologize after that" (44.9%) is not significantly different from participants who chose "Neither I nor the person apologizes" (55.1%, *p* > .1)    
+
+
+
+#### Task 7: create a single bar graph compare means of different feelings by initiator types   
+
+```{r,echo=FALSE, fig.height=5, fig.width=12}
+
+###change data type
+mydata.long$initiator_type = as.factor(mydata.long$initiator_type)
+
+##similar as Task 1, calculate relevant stat by feelings and initiator types
+plot.data.2 = mydata.long %>%
+  group_by(feeling, initiator_type) %>%
+  summarise(mean = mean(score, na.rm=TRUE),
+  sd = sd(score, na.rm=TRUE),
+  n = n(),
+  se=sd/sqrt(n),
+  ci = qt(0.975, df=n-1)*se)
+  
+###similar as Task 1, visualize the stat but by initiator types  
+ggplot(plot.data.2, aes(x=feeling, y=mean, group = factor(1))) + 
+  geom_bar(stat="identity") +
+  #by initiator types
+  facet_wrap(vars(initiator_type))+
+  #error bar
+  geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
+  #text of titles
+  labs(x="Feelings", y="Scores") +
+  ggtitle("Means of Different Feelings by Initiator Types")+
+  #format of titles
+  theme(legend.position="bottom",
+        plot.title = element_text(
+          hjust = 0.5, size = 12, face = "bold"))
+```
+
